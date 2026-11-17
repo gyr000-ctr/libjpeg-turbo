@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/tjexif-static.dir/link.d "CMakeFiles/tjexif-static.dir/src/tjexif.c.o" -o tjexif-static  libturbojpeg.a

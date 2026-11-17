@@ -1,0 +1,10 @@
+tjexif 5 0.0004079
+tjunittest-shared 2 1.77983
+tjunittest-shared-alloc 2 1.75042
+tjunittest-shared-yuv 2 0.624416
+tjunittest-shared-yuv-alloc 2 0.626511
+tjunittest-shared-yuv-nopad 2 0.624884
+tjunittest-shared-lossless 2 0.350985
+tjunittest-shared-lossless-alloc 2 0.333258
+tjunittest-shared-bmp 2 0.060491
+---

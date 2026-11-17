@@ -842,6 +842,9 @@ if(WITH_TURBOJPEG)
 
       add_executable(tjtran src/tjtran.c)
       target_link_libraries(tjtran turbojpeg)
+
+      add_executable(tjexif src/tjexif.c)
+      target_link_libraries(tjexif turbojpeg)
     endif()
 
     if(WITH_TOOLS)
@@ -874,6 +877,9 @@ if(WITH_TURBOJPEG)
       add_executable(tjunittest-static src/tjunittest.c src/tjutil.c
         src/md5/md5.c src/md5/md5hl.c)
       target_link_libraries(tjunittest-static turbojpeg-static)
+
+      add_executable(tjexif-static src/tjexif.c)
+      target_link_libraries(tjexif-static turbojpeg-static)
     endif()
 
     if(WITH_TOOLS)
@@ -1216,6 +1222,10 @@ foreach(libtype ${TEST_LIBTYPES})
       COMMAND tjunittest${suffix} -lossless -alloc)
     add_test(NAME tjunittest-${libtype}-bmp
       COMMAND tjunittest${suffix} -bmp)
+    if(libtype STREQUAL "shared" OR NOT ENABLE_SHARED)
+      add_test(NAME tjexif
+        COMMAND tjexif${suffix})
+    endif()
     add_test(NAME tjunittest12-${libtype}
       COMMAND tjunittest${suffix} -precision 12)
     add_test(NAME tjunittest12-${libtype}-alloc

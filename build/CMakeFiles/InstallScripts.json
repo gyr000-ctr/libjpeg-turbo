@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/gyr/feedback/uid24570/build/cmake_install.cmake",
+		"/home/gyr/feedback/uid24570/build/src/spng/cmake_install.cmake",
+		"/home/gyr/feedback/uid24570/build/sharedlib/cmake_install.cmake",
+		"/home/gyr/feedback/uid24570/build/sharedlib/spng/cmake_install.cmake",
+		"/home/gyr/feedback/uid24570/build/src/md5/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

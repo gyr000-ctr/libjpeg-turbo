@@ -1188,6 +1188,20 @@ enum TJXOP {
  * optimization improves compression slightly (generally 5% or less.)
  */
 #define TJXOPT_OPTIMIZE  (1 << 8)
+/**
+ * Automatically orient the destination image using the EXIF orientation tag
+ * (EXIF tag 0x0112) in the source image.  If the source image contains a
+ * valid EXIF orientation tag, then the destination image is losslessly
+ * rotated and/or flipped so that it appears upright, overriding the
+ * orientation indicated by the tag.  If the source image does not contain a
+ * valid EXIF orientation tag, then no transformation is performed (equivalent
+ * to #TJXOP_NONE.)  #tj3Transform() returns an error if the source image
+ * contains an EXIF orientation tag with an invalid value (not 1-8.)  This
+ * option cannot be combined with an explicit transform operation;  the
+ * <tt>op</tt> field of the #tjtransform structure must be #TJXOP_NONE when
+ * this option is specified.
+ */
+#define TJXOPT_AUTOORIENT  (1 << 9)
 
 
 /**

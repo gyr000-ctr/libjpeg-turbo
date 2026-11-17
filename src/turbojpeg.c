@@ -195,6 +195,20 @@ static const JXFORM_CODE xformtypes[TJ_NUMXOP] = {
   JXFORM_TRANSVERSE, JXFORM_ROT_90, JXFORM_ROT_180, JXFORM_ROT_270
 };
 
+/* Maps EXIF orientation values (EXIF tag 0x0112, values 1-8) to the TurboJPEG
+   transform operation that orients the image upright */
+static const int exifXformOps[9] = {
+  TJXOP_NONE,        /* 0: invalid (unused) */
+  TJXOP_NONE,        /* 1: horizontal (normal) */
+  TJXOP_HFLIP,       /* 2: mirror horizontal */
+  TJXOP_ROT180,      /* 3: rotate 180 */
+  TJXOP_VFLIP,       /* 4: mirror vertical */
+  TJXOP_TRANSPOSE,   /* 5: mirror horizontal and rotate 270 CW */
+  TJXOP_ROT90,       /* 6: rotate 90 CW */
+  TJXOP_TRANSVERSE,  /* 7: mirror horizontal and rotate 90 CW */
+  TJXOP_ROT270       /* 8: rotate 270 CW */
+};
+
 #endif
 
 #ifdef IDCT_SCALING_SUPPORTED
@@ -3010,6 +3024,88 @@ bailout:
 }
 
 
+#if TRANSFORMS_SUPPORTED
+
+static unsigned int getUint16EXIF(const unsigned char *p, boolean littleEndian)
+{
+  return littleEndian ? ((unsigned int)p[0] | ((unsigned int)p[1] << 8)) :
+                        (((unsigned int)p[0] << 8) | (unsigned int)p[1]);
+}
+
+static unsigned long getUint32EXIF(const unsigned char *p,
+                                   boolean littleEndian)
+{
+  return littleEndian ?
+    ((unsigned long)p[0] | ((unsigned long)p[1] << 8) |
+     ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24)) :
+    (((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) |
+     ((unsigned long)p[2] << 8) | (unsigned long)p[3]);
+}
+
+/* Extract the EXIF orientation (EXIF tag 0x0112) from the APP1 marker(s)
+   saved in the decompressor.  Returns the orientation value (1-8), or 1 if
+   the JPEG image contains no parseable EXIF orientation tag.  Throws a fatal
+   error if the EXIF orientation tag contains an invalid value. */
+static int getEXIFOrientation(tjinstance *this, const char *FUNCTION_NAME)
+{
+  int retval = 1;
+  jpeg_saved_marker_ptr marker;
+
+  for (marker = this->dinfo.marker_list; marker != NULL;
+       marker = marker->next) {
+    const unsigned char *tiff;
+    size_t tiffLen;
+    boolean littleEndian;
+    unsigned long ifdOffset, numEntries, i;
+
+    if (marker->marker != JPEG_APP0 + 1 || marker->data_length < 14 ||
+        memcmp(marker->data, "Exif\0\0", 6) != 0)
+      continue;
+
+    tiff = marker->data + 6;
+    tiffLen = marker->data_length - 6;
+
+    if (tiff[0] == 'I' && tiff[1] == 'I')
+      littleEndian = TRUE;
+    else if (tiff[0] == 'M' && tiff[1] == 'M')
+      littleEndian = FALSE;
+    else
+      continue;
+
+    if (getUint16EXIF(tiff + 2, littleEndian) != 42)
+      continue;
+
+    ifdOffset = getUint32EXIF(tiff + 4, littleEndian);
+    if (ifdOffset > tiffLen - 2)
+      continue;
+    numEntries = getUint16EXIF(tiff + ifdOffset, littleEndian);
+    if (numEntries > (tiffLen - ifdOffset - 2) / 12)
+      continue;
+
+    for (i = 0; i < numEntries; i++) {
+      const unsigned char *entry = tiff + ifdOffset + 2 + i * 12;
+
+      if (getUint16EXIF(entry, littleEndian) != 0x0112)
+        continue;
+      /* The orientation value is stored inline in the first two bytes of the
+         four-byte value field of a SHORT (type 3) entry with count 1. */
+      if (getUint16EXIF(entry + 2, littleEndian) != 3 ||
+          getUint32EXIF(entry + 4, littleEndian) != 1)
+        return 1;
+      retval = getUint16EXIF(entry + 8, littleEndian);
+      if (retval < 1 || retval > 8)
+        THROW("Invalid EXIF orientation");
+      return retval;
+    }
+  }
+
+bailout:
+  return retval;
+}
+
+#endif /* TRANSFORMS_SUPPORTED */
+
+
 /* TurboJPEG 3.1+ */
 DLLEXPORT size_t tj3TransformBufSize(tjhandle handle,
                                      const tjtransform *transform)
@@ -3038,6 +3134,23 @@ DLLEXPORT size_t tj3TransformBufSize(tjhandle handle,
   }
 
   retval = tj3JPEGBufSize(dstWidth, dstHeight, dstSubsamp);
+
+  if (transform->options & TJXOPT_AUTOORIENT) {
+    /* Whether the EXIF orientation will transpose the image is unknown until
+       the JPEG header is read, so return the worst-case buffer size. */
+    tjtransform rot90 = *transform;
+    int altSubsamp;
+    size_t altSize;
+
+    rot90.op = TJXOP_ROT90;
+    rot90.options &= ~TJXOPT_CROP;
+    altSubsamp = getDstSubsamp(this->subsamp, &rot90);
+    if (altSubsamp == TJSAMP_UNKNOWN)
+      altSubsamp = dstSubsamp;
+    altSize = tj3JPEGBufSize(this->jpegHeight, this->jpegWidth, altSubsamp);
+    if (altSize > retval)
+      retval = altSize;
+  }
 
   if ((this->saveMarkers == 2 || this->saveMarkers == 4) &&
       !(transform->options & TJXOPT_COPYNONE))
@@ -3081,7 +3194,7 @@ DLLEXPORT int tj3Transform(tjhandle handle, const unsigned char *jpegBuf,
 
   jpeg_transform_info *xinfo = NULL;
   jvirt_barray_ptr *srccoefs, *dstcoefs;
-  int i, saveMarkers = 0, srcSubsamp;
+  int i, saveMarkers = 0, srcSubsamp, autoOrient = 0, exifOrientation = 1;
   boolean alloc = TRUE;
   struct my_progress_mgr progress;
   unsigned char **tmpDstBufs = NULL;
@@ -3117,12 +3230,44 @@ DLLEXPORT int tj3Transform(tjhandle handle, const unsigned char *jpegBuf,
   for (i = 0; i < n; i++) {
     if (t[i].op < 0 || t[i].op >= TJ_NUMXOP)
       THROW("Invalid transform operation");
-    xinfo[i].transform = xformtypes[t[i].op];
+    if (t[i].options & TJXOPT_AUTOORIENT) {
+      if (t[i].op != TJXOP_NONE)
+        THROW("TJXOPT_AUTOORIENT cannot be combined with an explicit "
+              "transform operation");
+      autoOrient = 1;
+    }
+    if (!(t[i].options & TJXOPT_COPYNONE)) saveMarkers = 1;
+  }
+
+  jcopy_markers_setup(dinfo, saveMarkers ?
+                             (JCOPY_OPTION)this->saveMarkers : JCOPYOPT_NONE);
+  if (autoOrient)
+    jpeg_save_markers(dinfo, JPEG_APP0 + 1, 0xFFFF);
+  if (dinfo->global_state <= DSTATE_INHEADER)
+    jpeg_read_header(dinfo, TRUE);
+  if (this->maxPixels &&
+      (unsigned long long)dinfo->image_width * dinfo->image_height >
+      (unsigned long long)this->maxPixels)
+    THROW("Image is too large");
+  srcSubsamp = getSubsamp(this);
+
+  if (autoOrient) {
+    if ((exifOrientation = getEXIFOrientation(this, FUNCTION_NAME)) < 0) {
+      retval = -1;
+      goto bailout;
+    }
+  }
+
+  for (i = 0; i < n; i++) {
+    int op = (t[i].options & TJXOPT_AUTOORIENT) ?
+             exifXformOps[exifOrientation] : t[i].op;
+
+    xinfo[i].transform = xformtypes[op];
     xinfo[i].perfect = (t[i].options & TJXOPT_PERFECT) ? 1 : 0;
     xinfo[i].trim = (t[i].options & TJXOPT_TRIM) ? 1 : 0;
     xinfo[i].force_grayscale = (t[i].options & TJXOPT_GRAY) ? 1 : 0;
     xinfo[i].crop = (t[i].options & TJXOPT_CROP) ? 1 : 0;
-    if (n != 1 && t[i].op == TJXOP_HFLIP) xinfo[i].slow_hflip = 1;
+    if (n != 1 && op == TJXOP_HFLIP) xinfo[i].slow_hflip = 1;
     else xinfo[i].slow_hflip = 0;
 
     if (xinfo[i].crop) {
@@ -3139,18 +3284,7 @@ DLLEXPORT int tj3Transform(tjhandle handle, const unsigned char *jpegBuf,
       } else
         xinfo[i].crop_height = JCROP_UNSET;
     }
-    if (!(t[i].options & TJXOPT_COPYNONE)) saveMarkers = 1;
   }
-
-  jcopy_markers_setup(dinfo, saveMarkers ?
-                             (JCOPY_OPTION)this->saveMarkers : JCOPYOPT_NONE);
-  if (dinfo->global_state <= DSTATE_INHEADER)
-    jpeg_read_header(dinfo, TRUE);
-  if (this->maxPixels &&
-      (unsigned long long)dinfo->image_width * dinfo->image_height >
-      (unsigned long long)this->maxPixels)
-    THROW("Image is too large");
-  srcSubsamp = getSubsamp(this);
 
   for (i = 0; i < n; i++) {
     if (!jtransform_request_workspace(dinfo, &xinfo[i]))
